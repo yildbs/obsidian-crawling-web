@@ -30,6 +30,10 @@ const parseUrl = async function(yaml: { [name: string]: string }, content: strin
             const result = await parseYes24(yaml, content);
             return [true, result[1]];
         }
+        else if(url.search('ridibooks') != -1){
+            const result = await parseRidi(yaml, content);
+            return [true, result[1]];
+        }
         else{
             return [false, "url not supported!"];
         }
@@ -39,14 +43,135 @@ const parseUrl = async function(yaml: { [name: string]: string }, content: strin
     }
 }
 
+
+const parseRidi = async (yaml: { [name: string]: string }, content: string) => {
+    const url = yaml['parse-url'];
+    const response = await requestUrl({
+        url: url  
+    });
+    const parser = new DOMParser();
+    const html = parser.parseFromString(response.text, "text/html");
+
+    const yyyy_mm_dd = moment(new Date()).format().split("T")[0];
+    const yyyymmdd = yyyy_mm_dd.replace("_", "");
+
+
+    let tags: string[] = [];
+    html.querySelector(`head > meta:nth-child(4)`).getAttr("content").split(",").forEach(
+        (value) => {
+            tags.push(value.replace(/(\s*)/g, ""));
+        }
+    );
+    tags.push("독서");
+    tags = [...new Set(tags)];
+
+    let title = html
+        .querySelector(
+            "#page_detail > div.detail_wrap > div.detail_body_wrap > section > article.detail_header.trackable > div.header_info_wrap > div.info_title_wrap > h3"
+        )
+        .getText()
+        .replace(/\(.*\)/gi, "")
+        .replace(/\[.*\]/gi, "")
+        .replace(":", "：")
+        .replace("?", "？")
+        .trim();
+
+    let subtitle = html.querySelector(
+            "#page_detail > div.detail_wrap > div.detail_body_wrap > section > article.detail_header.trackable > div.header_info_wrap > div.info_title_wrap > h4"
+        )
+    if(subtitle == null){
+        subtitle = "";
+    }
+    else{
+        subtitle = subtitle
+            .getText()
+            .replace(/\(.*\)/gi, "")
+            .replace(/\[.*\]/gi, "")
+            .replace(":", "：")
+            .replace("?", "？")
+            .trim();
+    }
+
+    let authors: string[] = [];
+    html.querySelectorAll(
+        "#page_detail > div.detail_wrap > div.detail_body_wrap > section > article.detail_header.trackable > div.header_info_wrap > div:nth-child(4) > p.metadata.metadata_writer > span > a"
+    ).forEach((value) => {
+        authors.push(value.getText().trim());
+    });
+
+    // let page = +html
+    //     .querySelector(
+    //         "#infoset_specific > div.infoSetCont_wrap > div > table > tbody > tr:nth-child(2) > td"
+    //     )
+    //     .getText()
+    //     .split(" ")[0]
+    //     .slice(0, -1);
+    // if (isNaN(page)) page = 0;
+
+    const datePublished = html
+        .querySelector(
+            "#page_detail > div.detail_wrap > div.detail_body_wrap > section > article.detail_header.trackable > div.Header_Metadata_Block > ul:nth-child(1) > li.Header_Metadata_Item.book_info.published_date_info > ul > li"
+        )
+        .getText()
+        .trim().replace("\n", "");
+
+    const coverUrl = "https:" + html
+        .querySelector(
+            "#page_detail > div.detail_wrap > div.detail_body_wrap > section > article.detail_header.trackable > div.header_thumbnail_wrap > div.header_thumbnail.book_macro_200.detail_scalable_thumbnail > div > div > div > img"
+        )
+        .getAttribute("src");
+
+    yaml['title'] = title;
+    yaml['subtitle'] = subtitle;
+    yaml['publish_date'] = datePublished;
+    yaml['tags'] = tags.join("\n");
+    yaml['authors'] = authors.join("\n");
+    // yaml['total_page'] = page;
+    yaml['cover-url'] = coverUrl;
+    yaml['start_study_date'] = yyyy_mm_dd;
+    yaml['finish_study_date'] = yyyy_mm_dd;
+
+    const yamlDocument = stringifyYaml(yaml).replace(" |-\n", "\n")
+    const match = content.match (/@content/s);
+    if(match != null){
+        const start = match.index;
+        const end = start + match[0].length;
+        let newContent = ''
+        newContent += `\n![Cover](${coverUrl})\n\n`;
+        newContent += `# ${title}\n\n`;
+        newContent += `## 읽기 전 생각\n`;
+        newContent += `  (읽기전 표지나 서문을 보고 든 생각)\n\n`;
+        newContent += `## 읽으며 메모\n`;
+        newContent += `  (읽으며 중간중간 필요한 내용 정리)\n\n`;
+        newContent += `## 읽은 후 생각\n`;
+        newContent += `  (읽은 후 첫 인상과 달랐거나 중요하게 생각한 부분)\n\n`;
+        newContent += `## 목차\n`;
+        newContent += `  (목차별 내용 요약 및 주석)\n\n`;
+        newContent += `## Highlight\n`;
+        newContent += `  (내용과 주석 중 중요하다고 생각한 부분)\n\n`;
+        newContent += `## TODO\n`;
+        newContent += `  실천목록(내가 이 책을 읽고 실천 할 수 있는 부분)\n\n`;
+
+        content = content.slice(0, start) + newContent + content.slice(end);
+    }
+    content = `---\n${yamlDocument}\n---\n` + content;
+    return [yaml, content];
+}
+
+
 const parseYes24 = async (yaml: { [name: string]: string }, content: string) => {
     const url = yaml['parse-url'];
     const response = await requestUrl({
         url: url  
     });
-
     const parser = new DOMParser();
-    const html = parser.parseFromString(response.text, "text/html");
+    const html_pre = parser.parseFromString(response.text, "text/html");
+    const url2 = html_pre.querySelector("script").getText().match(/src="(.)*"/)[0].slice(5, -1)
+    const response2 = await requestUrl({
+        url: url2
+    });
+    const html = parser.parseFromString(response2.text, "text/html");
+
     const yyyy_mm_dd = moment(new Date()).format().split("T")[0];
     const yyyymmdd = yyyy_mm_dd.replace("_", "");
 
@@ -57,6 +182,13 @@ const parseYes24 = async (yaml: { [name: string]: string }, content: string) => 
     ).forEach((value) => {
         tags.push(value.getText().replace(/(\s*)/g, ""));
     });
+    try{
+        yaml['tags'].split(/ |\n/).forEach((t) =>{
+            tags.push(t);
+        })
+    }
+    catch(err){}
+    tags.push("독서");
     tags = [...new Set(tags)];
 
     let title = html
@@ -133,7 +265,7 @@ const parseYes24 = async (yaml: { [name: string]: string }, content: string) => 
         const start = match.index;
         const end = start + match[0].length;
         let newContent = ''
-        newContent += `\n![Cover](${coverUrl})\n# ${title}\n\n`;
+        newContent += `\n![Cover](${coverUrl})\n\n`;
         newContent += `# ${title}\n\n`;
         newContent += `## 읽기 전 생각\n`;
         newContent += `  (읽기전 표지나 서문을 보고 든 생각)\n\n`;
@@ -220,9 +352,17 @@ const parsePaperswithcode = async (yaml: { [name: string]: string }, content: st
         }
     }
 
+    let tags = []
+    try{
+        yaml['tags'].split(/ |\n/).forEach((t) =>{
+            tags.push(t);
+        })
+    }
+    catch(err){}
+
     yaml['title'] = title;
     yaml['publish_date'] = datePublished;
-    yaml['tags'] = tasks.join("\n") + authors.join("\n");
+    yaml['tags'] = tasks.join("\n") + authors.join("\n") + tags.join("\n");
     yaml['tasks'] = tasks.join("\n");
     yaml['authors'] = authors.join("\n");
     yaml['start_study_date'] = yyyy_mm_dd;
@@ -341,7 +481,7 @@ const parseYoutube = async (yaml: { [name: string]: string }, content: string) =
     if(match != null){
         const start = match.index;
         const end = start + match[0].length;
-        content = content.slice(0, start) + `\n![Cover](${thumbnailUrl})\n# ${title}\n` + content.slice(end);
+        content = content.slice(0, start) + `\n![Cover](${thumbnailUrl})\n# ${title}\n\n` + content.slice(end);
     }
     content = `---\n${yamlDocument}\n---\n` + content;
     return [yaml, content];
